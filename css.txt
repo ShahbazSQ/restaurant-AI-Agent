@@ -1,0 +1,1698 @@
+/* import streamlit as st
+import os
+from pathlib import Path
+from order_manager import OrderManager
+from payment_handler import PaymentHandler, PaymentMethod
+from config import config
+import requests
+import tempfile
+from rag_engine import RestaurantRAG
+import time
+
+
+default_session_state = {
+    "cart": [],
+    "show_cart": False,
+    "show_checkout": False,
+    "messages": [],
+    "pending_question": None,
+    "menu_processed": False,
+    "rag_engine": None,            # will be set later when you build the RAG engine
+    "order_manager": None,         # set when your order manager is created
+    "payment_handler": None,
+    "current_order": None,
+    # add other keys you rely on, e.g.:
+    # "user_profile": {},
+    # "last_search": ""
+}
+
+for key, value in default_session_state.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
+# -------------------------------------------
+# Page config
+st.set_page_config(
+    page_title="AI Menu Assistant Pro | Restaurant Intelligence",
+    page_icon="🤖",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Get API key
+try:
+    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+    API_KEY_SET = True
+except:
+    GROQ_API_KEY = None
+    API_KEY_SET = False
+
+
+def add_to_cart(item_name: str, price: float):
+    """Add item to cart"""
+    # Check if item already in cart
+    for item in st.session_state.cart:
+        if item['name'] == item_name:
+            item['qty'] += 1
+            item['subtotal'] = item['qty'] * item['price']
+            st.success(f"✅ Added another {item_name}!")
+            return
+    
+    # Add new item
+    st.session_state.cart.append({
+        "name": item_name,
+        "qty": 1,
+        "price": price,
+        "subtotal": price
+    })
+    st.success(f"✅ Added {item_name} to cart!")
+
+def remove_from_cart(index: int):
+    """Remove item from cart"""
+    if 0 <= index < len(st.session_state.cart):
+        item = st.session_state.cart.pop(index)
+        st.success(f"🗑️ Removed {item['name']} from cart")
+
+def update_cart_quantity(index: int, new_qty: int):
+    """Update item quantity in cart"""
+    if 0 <= index < len(st.session_state.cart):
+        if new_qty <= 0:
+            remove_from_cart(index)
+        else:
+            item = st.session_state.cart[index]
+            item['qty'] = new_qty
+            item['subtotal'] = new_qty * item['price']
+
+def get_cart_total() -> float:
+    """Calculate cart total"""
+    return sum(item['subtotal'] for item in st.session_state.cart)
+
+def clear_cart():
+    """Clear all items from cart"""
+    st.session_state.cart = []
+    st.success("🗑️ Cart cleared!")
+
+
+# ULTRA-PREMIUM CSS WITH REFINED ANIMATIONS AND RESPONSIVE DESIGN
+st.markdown("""
+    <style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+
+* {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+/* ---------- Root Variables for Consistency ---------- */
+:root {
+    --primary-gradient: linear-gradient(-45deg, #667eea, #764ba2, #f093fb, #4facfe);
+    --glass-bg: rgba(255, 255, 255, 0.98);
+    --glass-border: rgba(255, 255, 255, 0.3);
+    --shadow-sm: 0 4px 15px rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 10px 40px rgba(0, 0, 0, 0.08);
+    --shadow-lg: 0 20px 70px rgba(0, 0, 0, 0.12);
+    --shadow-xl: 0 30px 90px rgba(0, 0, 0, 0.15);
+    --transition-smooth: all 0.6s cubic-bezier(0.165, 0.84, 0.44, 1);
+    --transition-fast: all 0.3s ease;
+    --border-radius-sm: 12px;
+    --border-radius-md: 20px;
+    --border-radius-lg: 28px;
+    --border-radius-xl: 36px;
+}
+
+/* ---------- Global Layout ---------- */
+.main {
+    background: var(--primary-gradient);
+    background-size: 400% 400%;
+    animation: gradientShift 20s ease infinite;
+    background-attachment: fixed;
+    padding: 0 !important;
+    min-height: 100vh;
+}
+
+@keyframes gradientShift {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+}
+
+/* Container Wrapper for Centering */
+.stApp > div:first-child {
+    max-width: 100%;
+    margin: 0 auto;
+}
+
+/* ---------- Sidebar (Glassmorphism) ---------- */
+[data-testid="stSidebar"] {
+    background: rgba(255, 255, 255, 0.97) !important;
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border-right: 1px solid var(--glass-border);
+    box-shadow: 4px 0 40px rgba(0, 0, 0, 0.08);
+    animation: slideInLeft 0.6s ease-out;
+}
+
+@keyframes slideInLeft {
+    from { transform: translateX(-100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+
+[data-testid="stSidebar"] * {
+    color: #1f2937 !important;
+}
+
+[data-testid="stSidebar"] .stMarkdown p {
+    color: #6b7280 !important;
+    line-height: 1.6;
+}
+
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+}
+
+[data-testid="stSidebar"] input {
+    background: rgba(249, 250, 251, 0.95) !important;
+    color: #1f2937 !important;
+    border: 2px solid #e5e7eb !important;
+    border-radius: var(--border-radius-sm) !important;
+    padding: 0.75rem 1rem !important;
+    transition: var(--transition-fast) !important;
+    font-size: 0.95rem !important;
+}
+
+[data-testid="stSidebar"] input:focus {
+    background: #ffffff !important;
+    border-color: #667eea !important;
+    box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.12), 0 4px 20px rgba(102, 126, 234, 0.25) !important;
+    outline: none !important;
+    transform: translateY(-1px);
+}
+
+/* ---------- Hero Section ---------- */
+.hero-container {
+    position: relative;
+    overflow: hidden;
+    background: var(--glass-bg);
+    backdrop-filter: blur(30px);
+    border-radius: var(--border-radius-xl);
+    padding: 3.5rem 2.5rem;
+    margin: 2rem auto;
+    max-width: 1200px;
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--shadow-xl), 0 0 0 1px rgba(255, 255, 255, 0.1);
+    animation: heroFadeIn 1s ease-out;
+}
+
+@keyframes heroFadeIn {
+    from { opacity: 0; transform: translateY(40px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.hero-container::before {
+    content: '';
+    position: absolute;
+    inset: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle at 50% 50%, rgba(102, 126, 234, 0.06) 0%, transparent 60%);
+    animation: rotateGlow 25s linear infinite;
+    pointer-events: none;
+}
+
+@keyframes rotateGlow {
+    to { transform: rotate(360deg); }
+}
+
+.hero-title {
+    position: relative;
+    z-index: 1;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: clamp(2.5rem, 6vw, 4.5rem);
+    font-weight: 900;
+    line-height: 1.1;
+    letter-spacing: -2px;
+    margin-bottom: 1rem;
+    text-align: center;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shimmer 4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+    0%, 100% { background-position: 0% center; }
+    50% { background-position: 100% center; }
+}
+
+.hero-subtitle {
+    position: relative;
+    z-index: 1;
+    font-size: clamp(1.1rem, 2.5vw, 1.6rem);
+    font-weight: 600;
+    color: #4b5563;
+    text-align: center;
+    margin-bottom: 0.75rem;
+    animation: fadeSlideIn 1s ease-out 0.2s both;
+}
+
+.hero-caption {
+    position: relative;
+    z-index: 1;
+    text-align: center;
+    color: #9ca3af;
+    font-size: clamp(0.9rem, 2vw, 1.1rem);
+    font-weight: 500;
+    animation: fadeSlideIn 1s ease-out 0.4s both;
+}
+
+@keyframes fadeSlideIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ---------- Stats Section ---------- */
+.stats-container {
+    position: relative;
+    overflow: hidden;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: var(--border-radius-lg);
+    padding: 2rem 1.5rem;
+    margin: 0 auto 2rem;
+    max-width: 1200px;
+    box-shadow: 0 20px 60px rgba(102, 126, 234, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+    animation: statsSlideUp 0.8s ease-out 0.3s both;
+}
+
+@keyframes statsSlideUp {
+    from { opacity: 0; transform: translateY(40px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.stats-container::before {
+    content: '';
+    position: absolute;
+    width: 300px;
+    height: 300px;
+    top: -150px;
+    right: -150px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(255, 255, 255, 0.12) 0%, transparent 70%);
+    animation: statsPulse 5s ease-in-out infinite;
+}
+
+@keyframes statsPulse {
+    0%, 100% { transform: scale(1); opacity: 0.3; }
+    50% { transform: scale(1.3); opacity: 0.6; }
+}
+
+.stat-box {
+    text-align: center;
+    color: #fff;
+    animation: statPopIn 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55) both;
+    position: relative;
+    z-index: 1;
+}
+
+.stat-box:nth-child(1) { animation-delay: 0.5s; }
+.stat-box:nth-child(2) { animation-delay: 0.6s; }
+.stat-box:nth-child(3) { animation-delay: 0.7s; }
+.stat-box:nth-child(4) { animation-delay: 0.8s; }
+
+@keyframes statPopIn {
+    from { opacity: 0; transform: scale(0.6) translateY(30px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.stat-number {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: clamp(2rem, 5vw, 3rem);
+    font-weight: 900;
+    margin-bottom: 0.5rem;
+    text-shadow: 0 3px 12px rgba(0, 0, 0, 0.25);
+    display: block;
+}
+
+.stat-label {
+    font-size: clamp(0.75rem, 1.5vw, 1rem);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    opacity: 0.95;
+    display: block;
+}
+
+/* ---------- Feature Cards ---------- */
+.feature-card {
+    position: relative;
+    overflow: hidden;
+    height: 100%;
+    background: var(--glass-bg);
+    border: 2px solid transparent;
+    border-radius: var(--border-radius-lg);
+    padding: 2.5rem 2rem;
+    box-shadow: var(--shadow-md), 0 0 0 1px rgba(255, 255, 255, 0.5);
+    transition: var(--transition-smooth);
+    animation: cardFloatIn 0.8s ease-out both;
+}
+
+@keyframes cardFloatIn {
+    from { opacity: 0; transform: translateY(60px) scale(0.94); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.feature-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.08), rgba(118, 75, 162, 0.08));
+    opacity: 0;
+    transition: opacity 0.6s ease;
+}
+
+.feature-card:hover {
+    transform: translateY(-12px) scale(1.02);
+    border-color: rgba(102, 126, 234, 0.4);
+    box-shadow: 0 30px 80px rgba(102, 126, 234, 0.28), 0 0 0 1px rgba(102, 126, 234, 0.4);
+}
+
+.feature-card:hover::before { 
+    opacity: 1; 
+}
+
+.feature-icon {
+    position: relative;
+    z-index: 1;
+    font-size: clamp(2.5rem, 5vw, 3.5rem);
+    margin-bottom: 1.5rem;
+    display: inline-block;
+    filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.12));
+    animation: iconBounce 3s ease-in-out infinite;
+}
+
+@keyframes iconBounce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-12px); }
+}
+
+.feature-card:hover .feature-icon { 
+    animation: iconSpin 0.7s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+@keyframes iconSpin {
+    from { transform: rotate(0deg) scale(1); }
+    50% { transform: rotate(180deg) scale(1.25); }
+    to { transform: rotate(360deg) scale(1); }
+}
+
+.feature-title {
+    position: relative;
+    z-index: 1;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: clamp(1.2rem, 2.5vw, 1.6rem);
+    font-weight: 800;
+    color: #1f2937;
+    margin-bottom: 1rem;
+    letter-spacing: -0.5px;
+}
+
+.feature-desc {
+    position: relative;
+    z-index: 1;
+    font-size: clamp(0.95rem, 1.8vw, 1.05rem);
+    color: #6b7280;
+    line-height: 1.7;
+}
+
+.premium-badge {
+    display: inline-block;
+    background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+    color: #fff;
+    padding: 0.35rem 1rem;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 800;
+    margin-left: 0.5rem;
+    box-shadow: 0 4px 14px rgba(251, 191, 36, 0.45);
+    animation: badgeGlow 2.5s ease-in-out infinite;
+    vertical-align: middle;
+}
+
+@keyframes badgeGlow {
+    0%, 100% { box-shadow: 0 4px 14px rgba(251, 191, 36, 0.45); }
+    50% { box-shadow: 0 6px 24px rgba(251, 191, 36, 0.7); }
+}
+
+/* ---------- Upload & Chat Containers ---------- */
+.upload-container,
+.chat-container {
+    background: var(--glass-bg);
+    backdrop-filter: blur(30px);
+    border-radius: var(--border-radius-xl);
+    box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255, 255, 255, 0.5);
+    margin: 0 auto 2rem;
+    max-width: 1200px;
+    transition: var(--transition-smooth);
+}
+
+.upload-container { 
+    padding: 3rem 2.5rem; 
+    animation: containerFadeIn 0.8s ease-out 0.5s both;
+}
+
+.chat-container { 
+    padding: 2.5rem 2rem; 
+    min-height: 500px;
+    animation: containerFadeIn 0.8s ease-out 0.7s both;
+}
+
+@keyframes containerFadeIn {
+    from { opacity: 0; transform: translateY(40px) scale(0.97); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Transition effect when switching from upload to chat */
+.container-transition-out {
+    animation: fadeOut 0.5s ease-out forwards;
+}
+
+@keyframes fadeOut {
+    to { opacity: 0; transform: translateY(-30px) scale(0.98); }
+}
+
+.container-transition-in {
+    animation: slideInFromBottom 0.7s ease-out forwards;
+}
+
+@keyframes slideInFromBottom {
+    from { opacity: 0; transform: translateY(50px) scale(0.95); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ---------- Chat Messages ---------- */
+.stChatMessage {
+    background: #f9fafb !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: var(--border-radius-md) !important;
+    padding: 1.5rem !important;
+    margin-bottom: 1rem !important;
+    box-shadow: var(--shadow-sm) !important;
+    animation: messageSlideIn 0.5s ease-out !important;
+    transition: var(--transition-fast) !important;
+}
+
+@keyframes messageSlideIn {
+    from { opacity: 0; transform: translateX(-40px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+.stChatMessage:hover {
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1) !important;
+    transform: translateY(-2px) !important;
+}
+
+.stChatMessage[data-testid="user-message"] {
+    background: linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%) !important;
+    border-color: #c4b5fd !important;
+}
+
+/* ---------- Buttons ---------- */
+.stButton>button {
+    position: relative;
+    overflow: hidden;
+    border: none;
+    border-radius: var(--border-radius-md);
+    padding: 1rem 2.5rem;
+    font-weight: 700;
+    font-size: clamp(0.95rem, 2vw, 1.05rem);
+    color: #fff;
+    letter-spacing: 0.5px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    box-shadow: 0 6px 22px rgba(102, 126, 234, 0.38), 0 2px 8px rgba(102, 126, 234, 0.22);
+    transition: var(--transition-smooth);
+    cursor: pointer;
+}
+
+.stButton>button::before {
+    content: '';
+    position: absolute;
+    top: 0; 
+    left: -100%;
+    width: 100%; 
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+    transition: left 0.7s ease;
+}
+
+.stButton>button:hover::before { 
+    left: 100%; 
+}
+
+.stButton>button:hover {
+    transform: translateY(-4px) scale(1.03);
+    box-shadow: 0 14px 40px rgba(102, 126, 234, 0.48), 0 6px 16px rgba(102, 126, 234, 0.32);
+}
+
+.stButton>button:active { 
+    transform: translateY(-1px) scale(0.98); 
+}
+
+.stButton>button[kind="primary"] {
+    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+    font-size: clamp(1.1rem, 2.5vw, 1.3rem);
+    padding: 1.3rem 3rem;
+    box-shadow: 0 8px 32px rgba(245, 87, 108, 0.42), 0 0 60px rgba(245, 87, 108, 0.22);
+    animation: primaryPulse 3s ease-in-out infinite;
+}
+
+@keyframes primaryPulse {
+    0%, 100% { 
+        box-shadow: 0 8px 32px rgba(245, 87, 108, 0.42), 0 0 60px rgba(245, 87, 108, 0.22); 
+    }
+    50% { 
+        box-shadow: 0 10px 38px rgba(245, 87, 108, 0.55), 0 0 80px rgba(245, 87, 108, 0.35); 
+    }
+}
+
+.stButton>button[kind="primary"]:hover {
+    box-shadow: 0 16px 55px rgba(245, 87, 108, 0.65), 0 0 100px rgba(245, 87, 108, 0.45);
+}
+
+/* ---------- Inputs ---------- */
+.stTextInput>div>div>input,
+.stTextArea textarea {
+    background: #f9fafb;
+    border: 2px solid #e5e7eb;
+    border-radius: var(--border-radius-sm);
+    padding: 0.95rem 1.2rem;
+    font-size: clamp(0.9rem, 2vw, 1.05rem);
+    transition: var(--transition-smooth);
+}
+
+.stTextInput>div>div>input:focus,
+.stTextArea textarea:focus {
+    background: #fff;
+    border-color: #667eea;
+    box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.12), 0 4px 30px rgba(102, 126, 234, 0.22);
+    transform: translateY(-2px);
+    outline: none;
+}
+
+/* ---------- File Uploader ---------- */
+[data-testid="stFileUploadDropzone"] {
+    position: relative;
+    overflow: hidden;
+    border: 3px dashed #667eea;
+    border-radius: var(--border-radius-lg);
+    padding: 3.5rem 2rem;
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.06), rgba(118, 75, 162, 0.06));
+    transition: var(--transition-smooth);
+}
+
+[data-testid="stFileUploadDropzone"]::before {
+    content: '';
+    position: absolute;
+    inset: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle, rgba(102, 126, 234, 0.08) 0%, transparent 70%);
+    animation: uploadGlow 4s ease-in-out infinite;
+    pointer-events: none;
+}
+
+@keyframes uploadGlow {
+    0%, 100% { transform: scale(1); opacity: 0.5; }
+    50% { transform: scale(1.2); opacity: 0.8; }
+}
+
+[data-testid="stFileUploadDropzone"]:hover {
+    border-color: #764ba2;
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.12), rgba(118, 75, 162, 0.12));
+    box-shadow: 0 10px 40px rgba(102, 126, 234, 0.2);
+    transform: translateY(-3px);
+}
+
+/* ---------- Expander ---------- */
+.streamlit-expanderHeader {
+    background: #f9fafb !important;
+    border-radius: var(--border-radius-sm) !important;
+    padding: 0.9rem 1.2rem !important;
+    font-weight: 600 !important;
+    transition: var(--transition-fast) !important;
+}
+
+.streamlit-expanderHeader:hover {
+    background: #f3f4f6 !important;
+    box-shadow: var(--shadow-sm) !important;
+}
+
+/* ---------- Responsive Design ---------- */
+@media screen and (max-width: 1024px) {
+    .hero-container,
+    .stats-container,
+    .upload-container,
+    .chat-container {
+        margin-left: 1rem;
+        margin-right: 1rem;
+    }
+    
+    .hero-container {
+        padding: 2.5rem 1.5rem;
+    }
+    
+    .upload-container {
+        padding: 2rem 1.5rem;
+    }
+    
+    .chat-container {
+        padding: 1.5rem;
+    }
+    
+    .feature-card {
+        padding: 2rem 1.5rem;
+        margin-bottom: 1.5rem;
+    }
+}
+
+@media screen and (max-width: 768px) {
+    .hero-title {
+        font-size: 2.5rem;
+        letter-spacing: -1px;
+    }
+    
+    .hero-subtitle {
+        font-size: 1.2rem;
+    }
+    
+    .hero-caption {
+        font-size: 0.95rem;
+    }
+    
+    .stats-container {
+        padding: 1.5rem 1rem;
+    }
+    
+    .stat-number {
+        font-size: 2rem;
+    }
+    
+    .stat-label {
+        font-size: 0.8rem;
+    }
+    
+    [data-testid="stFileUploadDropzone"] {
+        padding: 2.5rem 1.5rem;
+    }
+    
+    .stButton>button {
+        padding: 0.9rem 2rem;
+        font-size: 0.95rem;
+    }
+    
+    .stButton>button[kind="primary"] {
+        padding: 1.1rem 2.5rem;
+        font-size: 1.1rem;
+    }
+}
+
+@media screen and (max-width: 480px) {
+    .hero-container,
+    .stats-container,
+    .upload-container,
+    .chat-container {
+        margin-left: 0.5rem;
+        margin-right: 0.5rem;
+        border-radius: var(--border-radius-lg);
+    }
+    
+    .hero-container {
+        padding: 2rem 1.25rem;
+    }
+    
+    .feature-card {
+        padding: 1.5rem 1.25rem;
+    }
+    
+    .stChatMessage {
+        padding: 1.2rem !important;
+    }
+}
+
+/* ---------- Prevent FOUC (Flash of Unstyled Content) ---------- */
+.main > div {
+    opacity: 0;
+    animation: preventFOUC 0.01s 0.1s forwards;
+}
+
+@keyframes preventFOUC {
+    to { opacity: 1; }
+}
+
+/* ---------- Smooth Scrolling ---------- */
+html {
+    scroll-behavior: smooth;
+}
+
+/* ---------- Custom Scrollbar ---------- */
+::-webkit-scrollbar {
+    width: 12px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    border-radius: 10px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(135deg, #764ba2, #f093fb);
+}
+
+/* ---------- Loading Spinner Enhancement ---------- */
+.stSpinner > div {
+    border-color: #667eea transparent transparent transparent !important;
+}
+
+/* ---------- Success/Error/Info Messages ---------- */
+.stAlert {
+    border-radius: var(--border-radius-sm) !important;
+    animation: alertSlide 0.5s ease-out !important;
+}
+
+@keyframes alertSlide {
+    from { opacity: 0; transform: translateY(-20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ---------- Metric Cards ---------- */
+[data-testid="stMetricValue"] {
+    font-size: 1.8rem !important;
+    font-weight: 800 !important;
+    font-family: 'Space Grotesk', sans-serif !important;
+}
+
+/* ---------- Columns Gap Fix ---------- */
+[data-testid="column"] {
+    padding: 0 0.5rem !important;
+}
+
+/* ---------- Hide Streamlit Branding ---------- */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+
+    </style>
+""", unsafe_allow_html=True)
+
+# Initialize session state
+if 'rag_engine' not in st.session_state:
+    st.session_state.rag_engine = None
+if 'messages' not in st.session_state:
+    st.session_state.messages = []
+if 'menu_processed' not in st.session_state:
+    st.session_state.menu_processed = False
+
+# Sidebar
+with st.sidebar:
+    st.markdown("# ⚙️ Control Center")
+    st.markdown("---")
+    
+    st.markdown("### 🏪 Restaurant Branding")
+    restaurant_name = st.text_input(
+        "Restaurant Name",
+        "Demo Restaurant",
+        help="Your restaurant's name"
+    )
+    
+    restaurant_tagline = st.text_input(
+        "Tagline",
+        "Delicious food, AI service",
+        help="Your restaurant's motto"
+    )
+    
+    st.markdown("---")
+    
+    if st.session_state.menu_processed:
+        st.success("✅ **System Online**")
+        
+        items_count = len(st.session_state.rag_engine.menu_items) if st.session_state.rag_engine.menu_items else 0
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("📋 Items", items_count)
+        with col2:
+            st.metric("💬 Chats", len(st.session_state.messages))
+        
+        if st.button("🔄 Reset Chat", use_container_width=True):
+            if st.session_state.rag_engine:
+                st.session_state.rag_engine.reset_conversation()
+            st.session_state.messages = []
+            st.rerun()
+    else:
+        st.info("⏳ **Ready to Launch**")
+    
+    st.markdown("---")
+    
+    st.markdown("### 🔧 System Specifications")
+    st.markdown("""
+    **AI Model:** Llama 3.3 70B  
+    **Provider:** Groq ⚡  
+    **Embeddings:** HuggingFace  
+    **Vector DB:** FAISS  
+    **Status:** 🟢 Online  
+    """)
+    
+    st.markdown("---")
+    
+    st.markdown("### 📊 Portfolio Stats")
+    st.markdown("""
+    **Speed:** <1s response  
+    **Accuracy:** 95%+  
+    **Languages:** Multi-lingual  
+    **Scalable:** Yes  
+    """)
+    
+    st.markdown("---")
+    
+    st.markdown("""
+    <div style='text-align: center; padding: 2rem 0; font-size: 0.9rem;'>
+        <p style='margin: 0.5rem 0; font-weight: 700; color: #667eea;'>⚡ Powered by</p>
+        <p style='margin: 0.3rem 0; color: #6b7280;'>Groq AI • LangChain • FAISS</p>
+        <p style='margin: 1.5rem 0 0.5rem 0; font-weight: 800; font-size: 1.1rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;'>Made by Shahbaz</p>
+        <p style='margin: 0.3rem 0; font-size: 0.8rem; color: #9ca3af;'>Full-Stack AI Developer</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("---")
+    
+    # Cart summary
+    #if len(st.session_state.cart) > 0:
+    # Cart summary in sidebar
+    if len(st.session_state.cart) > 0:
+        st.markdown("### 🛒 Cart")
+        cart_total = get_cart_total()
+        items_count = sum(item['qty'] for item in st.session_state.cart)
+        
+        st.metric("Items", items_count)
+        st.metric("Total", f"Rs {int(cart_total)}")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("👁️ View", use_container_width=True):
+                st.session_state.show_cart = True
+                st.rerun()
+        with col2:
+            if st.button("💳 Checkout", use_container_width=True, type="primary"):
+                st.session_state.show_checkout = True
+                st.rerun()
+    else:
+        st.info("🛒 Cart is empty")
+
+# Add these to your existing session state initialization
+if 'cart' not in st.session_state:
+    st.session_state.cart = []
+if 'show_cart' not in st.session_state:
+    st.session_state.show_cart = False
+if 'show_checkout' not in st.session_state:
+    st.session_state.show_checkout = False
+if 'current_order' not in st.session_state:
+    st.session_state.current_order = None
+if 'order_manager' not in st.session_state:
+    try:
+        st.session_state.order_manager = OrderManager()
+    except Exception as e:
+        st.error(f"⚠️ Order system not available: {e}")
+        st.session_state.order_manager = None
+if 'payment_handler' not in st.session_state:
+    try:
+        st.session_state.payment_handler = PaymentHandler()
+    except Exception as e:
+        st.error(f"⚠️ Payment system not available: {e}")
+        st.session_state.payment_handler = None
+
+# API Key Check
+if not API_KEY_SET:
+    st.error("""
+    ⚠️ **API Key Not Configured**
+    
+    The owner needs to add the Groq API key in Streamlit secrets.
+    
+    **Setup Instructions:**
+    1. Go to Streamlit Dashboard
+    2. Navigate to App Settings → Secrets
+    3. Add: `GROQ_API_KEY = "your_groq_key_here"`
+    """)
+    st.stop()
+
+# Hero Section
+st.markdown(f"""
+<div class='hero-container'>
+    <div class='hero-title'>{restaurant_name}</div>
+    <div class='hero-subtitle'>{restaurant_tagline}</div>
+    <div class='hero-caption'> AI-Powered Menu Intelligence • ⚡ Instant Answers • 🌍 24/7 Available</div>
+</div>
+""", unsafe_allow_html=True)
+
+st.write("##")
+st.write("##")
+# Stats Bar (only visible if menu processed)
+if st.session_state.menu_processed:
+    items_count = len(st.session_state.rag_engine.menu_items) if st.session_state.rag_engine.menu_items else 0
+    
+    st.markdown(f"""
+    <div class='stats-container'>
+        <div style='display: flex; justify-content: space-around; align-items: center; flex-wrap: wrap; gap: 1rem; position: relative;'>
+            <div class='stat-box'>
+                <span class='stat-number'>{items_count}</span>
+                <span class='stat-label'>Menu Items</span>
+            </div>
+            <div class='stat-box'>
+                <span class='stat-number'>{len(st.session_state.messages)}</span>
+                <span class='stat-label'>Conversations</span>
+            </div>
+            <div class='stat-box'>
+                <span class='stat-number'>24/7</span>
+                <span class='stat-label'>Available</span>
+            </div>
+            <div class='stat-box'>
+                <span class='stat-number'>⚡</span>
+                <span class='stat-label'>Lightning Fast</span>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# Features Section (only show if menu NOT processed)
+if not st.session_state.menu_processed:
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("""
+        <div class='feature-card'>
+            <div class='feature-icon'>💬</div>
+            <div class='feature-title'>Intelligent Chat</div>
+            <div class='feature-desc'>
+                Natural conversations powered by Llama 3.3 70B. 
+                Understands context, preferences, dietary restrictions, 
+                and provides personalized recommendations.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("""
+        <div class='feature-card'>
+            <div class='feature-icon'>📱</div>
+            <div class='feature-title'>WhatsApp Ready<span class='premium-badge'>PRO</span></div>
+            <div class='feature-desc'>
+                Seamlessly integrate with WhatsApp Business API. 
+                Meet customers where they are and automate 
+                responses 24/7.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown("""
+        <div class='feature-card'>
+            <div class='feature-icon'>⚡</div>
+            <div class='feature-title'>Lightning Fast</div>
+            <div class='feature-desc'>
+                Powered by Groq's inference engine with FAISS 
+                vector search. Sub-second responses with 
+                pinpoint accuracy.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Upload Section
+    # st.markdown('<div class="upload-container">', unsafe_allow_html=True)
+    st.write("##")
+    st.write("##")
+    st.write("##")
+    col1, col2 = st.columns([3, 2])
+    
+    with col1:
+        st.markdown("### 📤 Upload Your Restaurant Menu")
+        st.markdown("Drag and drop your PDF menu or click to browse. The AI will analyze and learn your entire menu in seconds.")
+        
+        uploaded_file = st.file_uploader(
+            "Drop your PDF here or click to browse",
+            type=['pdf'],
+            help="Standard PDF format, any language supported",
+            label_visibility="collapsed"
+        )
+        
+        if uploaded_file:
+            st.success(f" **{uploaded_file.name}** is ready to process!")
+            st.info(f" File size: {uploaded_file.size / 1024:.1f} KB")
+    
+    with col2:
+        st.markdown("###  Quick Start Guide")
+        st.markdown("""
+        **Get started in 3 simple steps:**
+        
+        **1️⃣ Upload**  
+        Drop your menu PDF file
+        
+        **2️⃣ Process**  
+        Click the launch button
+        
+        **3️⃣ Chat**  
+        Start asking questions!
+        
+        **Total time: ~30 seconds**
+        """)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Launch Button
+    if uploaded_file:
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.button("🚀 LAUNCH AI ASSISTANT", type="primary", use_container_width=True):
+                with st.spinner(" Training AI on your menu... This will take about 30 seconds"):
+                    try:
+                        # Progress bar for visual feedback
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        
+                        # Save temp file
+                        status_text.text(" Saving menu file...")
+                        progress_bar.progress(20)
+                        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+                            tmp.write(uploaded_file.getvalue())
+                            tmp_path = tmp.name
+                        
+                        # Initialize RAG engine
+                        status_text.text(" Initializing AI engine...")
+                        progress_bar.progress(40)
+                        st.session_state.rag_engine = RestaurantRAG(
+                            api_key=GROQ_API_KEY,
+                            model="llama-3.3-70b-versatile",
+                            provider="groq"
+                        )
+                        
+                        # Process menu
+                        status_text.text(" Learning your menu...")
+                        progress_bar.progress(60)
+                        st.session_state.rag_engine.process_menu(tmp_path)
+                        
+                        # Cleanup
+                        status_text.text("✨ Finalizing setup...")
+                        progress_bar.progress(90)
+                        os.unlink(tmp_path)
+                        
+                        progress_bar.progress(100)
+                        status_text.text("Complete!")
+                        
+                        st.session_state.menu_processed = True
+                        time.sleep(0.5)
+                        st.success("🎉 **AI Assistant is now live and ready to help!**")
+                        st.balloons()
+                        time.sleep(1)
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"❌ **Error:** {str(e)}")
+                        st.info("💡 **Tip:** Make sure your PDF is not corrupted and contains readable text.")
+    else:
+        st.markdown("""
+        <div style='text-align: center; padding: 2.5rem 1.5rem; color: black;'>
+            <p style='font-size: 1.2rem; margin-bottom: 0.5rem; font-weight: 600;'>👆 Upload a menu PDF to get started</p>
+            <p style='font-size: 0.95rem;'>Don't have one? Check the sample_menus/ folder</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# Chat Interface (only visible if menu processed)
+if st.session_state.menu_processed and st.session_state.rag_engine:
+    
+    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+    
+    st.markdown("### 💭 Try These Popular Questions")
+    st.markdown("<p style='color: #6b7280; margin-bottom: 1.5rem;'>Click any question to get instant answers</p>", unsafe_allow_html=True)
+
+    cols = st.columns(4)
+    samples = [
+        ("🌱", "What vegan options do you have?"),
+        ("💰", "Show me items under 500 PKR"),
+        ("🌶️", "What's your spiciest dish?"),
+        ("🍗", "List all chicken items")
+    ]
+
+    # Store clicked suggestion
+    if "pending_question" not in st.session_state:
+        st.session_state.pending_question = None
+
+    for idx, (emoji, question) in enumerate(samples):
+        label = f"{emoji} {question.split('?')[0].split('items')[0][:20]}..."
+        if cols[idx].button(label, use_container_width=True, key=f"q_{idx}"):
+            st.session_state.pending_question = question
+            st.rerun()
+
+    st.markdown("---")
+
+    # Display Messages
+    for idx, msg in enumerate(st.session_state.messages):
+        avatar = "👤" if msg["role"] == "user" else "🤖"
+        with st.chat_message(msg["role"], avatar=avatar):
+            st.write(msg["content"])
+
+    # Detect either manual chat input OR button click
+    user_prompt = None
+    if prompt := st.chat_input("💬 Ask me anything about the menu..."):
+        user_prompt = prompt
+    elif st.session_state.pending_question:
+        user_prompt = st.session_state.pending_question
+        st.session_state.pending_question = None  # reset after use
+
+    if user_prompt:
+        st.session_state.messages.append({"role": "user", "content": user_prompt})
+        
+        with st.chat_message("user", avatar="👤"):
+            st.write(user_prompt)
+        
+        with st.chat_message("assistant", avatar="🤖"):
+            with st.spinner("🤔 Thinking..."):
+                try:
+                    response = st.session_state.rag_engine.query(user_prompt)
+                    answer = response['answer']
+                    st.write(answer)
+                    
+                    if response.get('recommendations') or response.get('popular_items'):
+                        st.markdown("---")
+                        st.markdown("**🛒 Quick Actions:**")
+                        
+                        items_to_show = response.get('recommendations', []) or response.get('popular_items', [])
+                        
+                        if items_to_show:
+                            cols = st.columns(min(3, len(items_to_show)))
+                            for idx, item_data in enumerate(items_to_show[:3]):
+                                # Handle both dict and tuple formats
+                                if isinstance(item_data, dict):
+                                    item_name = item_data.get('name')
+                                    item_price = item_data.get('price')
+                                elif isinstance(item_data, tuple) and len(item_data) >= 3:
+                                    item_name = item_data[0]
+                                    item_price = item_data[2]
+                                else:
+                                    continue
+                                
+                                if item_name and item_price:
+                                    with cols[idx]:
+                                        if st.button(f"🛒 Add {item_name[:15]}...", key=f"add_cart_{idx}", use_container_width=True):
+                                            add_to_cart(item_name, float(item_price))
+                                            st.success(f"✅ Added to cart!")
+                                            time.sleep(0.5)
+                                            st.rerun()
+                                        
+                    if response.get('source_documents'):
+                        with st.expander("📚 View Sources & Context"):
+                            for idx, doc in enumerate(response['source_documents'][:3]):
+                                st.markdown(f"**📄 Source {idx+1}:**")
+                                st.code(doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content)
+                                st.markdown("---")
+                    
+                    st.session_state.messages.append({"role": "assistant", "content": answer})
+                
+                except Exception as e:
+                    st.error(f"❌ **Error processing your question:** {str(e)}")
+                    st.info("💡 **Tip:** Try rephrasing your question or make it more specific.")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+elif st.session_state.show_checkout:
+    st.markdown('<div class="chat-content">', unsafe_allow_html=True)
+    
+    st.markdown("### 💳 Checkout")
+    
+    if len(st.session_state.cart) == 0:
+        st.warning("Your cart is empty!")
+        if st.button("← Back to Menu"):
+            st.session_state.show_checkout = False
+            st.rerun()
+    else:
+        # Order summary
+        with st.expander("📋 Order Summary", expanded=True):
+            for item in st.session_state.cart:
+                st.write(f"{item['qty']}x {item['name']} - Rs {int(item['subtotal'])}")
+            
+            st.markdown("---")
+            subtotal = get_cart_total()
+            delivery_fee = 50
+            tax = subtotal * 0.05
+            total = subtotal + delivery_fee + tax
+            
+            st.write(f"**Subtotal:** Rs {int(subtotal)}")
+            st.write(f"**Delivery Fee:** Rs {int(delivery_fee)}")
+            st.write(f"**Tax (5%):** Rs {int(tax)}")
+            st.markdown(f"### **Total: Rs {int(total)}**")
+        
+        st.markdown("---")
+        
+        # Customer details form
+        st.markdown("### 📝 Delivery Details")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            customer_name = st.text_input(
+                "Full Name *",
+                placeholder="Ahmed Khan"
+            )
+        with col2:
+            customer_phone = st.text_input(
+                "Phone Number *",
+                placeholder="+92 300 1234567"
+            )
+        
+        delivery_address = st.text_area(
+            "Delivery Address *",
+            placeholder="House #123, Street 4, DHA Phase 2, Karachi"
+        )
+        
+        special_instructions = st.text_area(
+            "Special Instructions (Optional)",
+            placeholder="Extra spicy, no onions, ring the bell twice"
+        )
+        
+        st.markdown("---")
+        
+        # Payment method selection
+        st.markdown("### 💰 Payment Method")
+        
+        payment_method = st.radio(
+            "Choose payment method:",
+            ["💵 Cash on Delivery", "💳 Mock Payment (Demo)", "📱 JazzCash (Coming Soon)"],
+            label_visibility="collapsed"
+        )
+        
+        st.markdown("---")
+        
+        # Place order button
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            if st.button("← Back to Cart", use_container_width=True):
+                st.session_state.show_checkout = False
+                st.session_state.show_cart = True
+                st.rerun()
+        
+        with col2:
+            if st.button("🚀 Place Order", use_container_width=True, type="primary"):
+                # Validate inputs
+                if not customer_name or not customer_phone or not delivery_address:
+                    st.error("⚠️ Please fill in all required fields!")
+                elif not st.session_state.order_manager:
+                    st.error("⚠️ Order system not available. Please try again later.")
+                else:
+                    try:
+                        with st.spinner("Creating your order..."):
+                            # Create order
+                            order = st.session_state.order_manager.create_order(
+                                customer_phone=customer_phone,
+                                customer_name=customer_name,
+                                items=st.session_state.cart,
+                                delivery_address=delivery_address,
+                                special_instructions=special_instructions if special_instructions else None,
+                                delivery_type="DELIVERY"
+                            )
+                            
+                            st.session_state.current_order = order
+                            
+                            # Process payment
+                            if "Cash on Delivery" in payment_method:
+                                method = PaymentMethod.CASH
+                            elif "Mock Payment" in payment_method:
+                                method = PaymentMethod.MOCK
+                            else:
+                                method = PaymentMethod.JAZZCASH
+                            
+                            payment_result = st.session_state.payment_handler.initiate_payment(
+                                order_id=order['order_id'],
+                                amount=order['total'],
+                                customer_phone=customer_phone,
+                                method=method
+                            )
+                            
+                            if payment_result['status'] == 'SUCCESS':
+                                st.balloons()
+                                st.success("✅ Order placed successfully!")
+                                
+                                # Show order confirmation
+                                st.markdown("---")
+                                st.markdown("### 🎉 Order Confirmed!")
+                                
+                                st.info(f"""
+**Order ID:** {order['order_id']}
+
+**Total:** Rs {int(order['total'])}
+
+**Payment:** {payment_result['method']}
+
+**Status:** {payment_result['message']}
+
+**Estimated Delivery:** {order['estimated_delivery'].strftime('%I:%M %p')}
+
+We've sent a confirmation to your phone!
+                                """)
+                                
+                                # Clear cart
+                                st.session_state.cart = []
+                                
+                                # Option to track order
+                                if st.button("📦 Track My Order"):
+                                    st.session_state.show_checkout = False
+                                    st.rerun()
+                                
+                                if st.button("🏠 Back to Menu"):
+                                    st.session_state.show_checkout = False
+                                    st.rerun()
+                            
+                            else:
+                                st.error(f"❌ Payment failed: {payment_result['message']}")
+                    
+                    except Exception as e:
+                        st.error(f"❌ Error placing order: {str(e)}")
+                        st.info("💡 Please try again or contact support.")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+def show_order_tracking():
+    
+    st.markdown('<div class="chat-content">', unsafe_allow_html=True)
+    
+    st.markdown("### 📦 Track Your Order")
+    
+    order_id = st.text_input("Enter Order ID", placeholder="ORD-20250112-ABCD")
+    
+    if st.button("🔍 Track Order"):
+        if order_id and st.session_state.order_manager:
+            order = st.session_state.order_manager.get_order(order_id)
+            
+            if order:
+                # Display order details
+                st.success(f"Order found: {order_id}")
+                
+                # Order summary
+                st.markdown(st.session_state.order_manager.get_order_summary(order_id))
+                
+                # Status timeline
+                st.markdown("---")
+                st.markdown("### 📅 Order Timeline")
+                
+                timeline = st.session_state.order_manager.get_order_timeline(order_id)
+                
+                for event in timeline:
+                    status_emoji = "✅" if event['completed'] else "⏳"
+                    st.write(f"{status_emoji} **{event['label']}** - {event['timestamp'].strftime('%I:%M %p')}")
+            else:
+                st.error("Order not found. Please check the Order ID.")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# Add button to access order tracking from sidebar
+with st.sidebar:
+    if st.button("📦 Track Order", use_container_width=True):
+        # Show tracking interface
+        pass  # Call show_order_tracking() in main area
+    # WhatsApp Integration CTA
+    st.markdown("""
+    <div class='upload-container' style='text-align: center; margin-top: 2.5rem;'>
+        <h2 style='margin-bottom: 1rem; font-size: clamp(1.8rem, 4vw, 2.5rem); font-family: "Space Grotesk", sans-serif; background: linear-gradient(135deg, #25D366 0%, #128C7E 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;'>
+            📱 Ready for WhatsApp Integration?
+        </h2>
+        <p style='font-size: clamp(1rem, 2vw, 1.2rem); color: #6b7280; margin-bottom: 2rem; line-height: 1.7; max-width: 800px; margin-left: auto; margin-right: auto;'>
+            Take your restaurant to the next level. Bring this AI assistant to WhatsApp Business 
+            and serve customers on their favorite platform.
+        </p>
+        <div style='display: flex; justify-content: center; gap: 2rem; margin-bottom: 2rem; flex-wrap: wrap;'>
+            <div style='text-align: center;'>
+                <div style='font-size: 2rem; margin-bottom: 0.5rem;'>✅</div>
+                <div style='color: #4b5563; font-weight: 600; font-size: 0.95rem;'>24/7 Automated</div>
+            </div>
+            <div style='text-align: center;'>
+                <div style='font-size: 2rem; margin-bottom: 0.5rem;'>🌍</div>
+                <div style='color: #4b5563; font-weight: 600; font-size: 0.95rem;'>Multi-language</div>
+            </div>
+            <div style='text-align: center;'>
+                <div style='font-size: 2rem; margin-bottom: 0.5rem;'>📦</div>
+                <div style='color: #4b5563; font-weight: 600; font-size: 0.95rem;'>Order Processing</div>
+            </div>
+            <div style='text-align: center;'>
+                <div style='font-size: 2rem; margin-bottom: 0.5rem;'>📊</div>
+                <div style='color: #4b5563; font-weight: 600; font-size: 0.95rem;'>Analytics</div>
+            </div>
+        </div>
+        <a href='#' style='text-decoration: none;'>
+            <button style='
+                background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
+                color: white;
+                padding: 1.2rem 3rem;
+                border: none;
+                border-radius: 50px;
+                font-weight: 700;
+                font-size: clamp(1rem, 2vw, 1.2rem);
+                cursor: pointer;
+                box-shadow: 0 10px 40px rgba(37, 211, 102, 0.4);
+                transition: all 0.4s ease;
+                font-family: "Inter", sans-serif;
+            ' onmouseover='this.style.transform="translateY(-5px)"; this.style.boxShadow="0 15px 50px rgba(37, 211, 102, 0.6)"' 
+               onmouseout='this.style.transform="translateY(0)"; this.style.boxShadow="0 10px 40px rgba(37, 211, 102, 0.4)"'>
+                🚀 UPGRADE TO PRO VERSION
+            </button>
+        </a>
+        <p style='margin-top: 1.5rem; color: #9ca3af; font-size: 0.95rem;'>
+            💼 Perfect for: Restaurants • Cafes • Cloud Kitchens • Food Trucks
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Portfolio Showcase
+    st.markdown("---")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("""
+        <div style='text-align: center; padding: 2.5rem 1.5rem; background: white; border-radius: 24px; box-shadow: 0 10px 35px rgba(0,0,0,0.08); transition: all 0.4s ease;' onmouseover='this.style.transform="translateY(-8px)"; this.style.boxShadow="0 15px 50px rgba(0,0,0,0.12)"' onmouseout='this.style.transform="translateY(0)"; this.style.boxShadow="0 10px 35px rgba(0,0,0,0.08)"'>
+            <div style='font-size: 3rem; margin-bottom: 1rem;'>🎯</div>
+            <div style='font-size: 2rem; font-weight: 900; color: #667eea; margin-bottom: 0.5rem; font-family: "Space Grotesk", sans-serif;'>95%+</div>
+            <div style='color: #6b7280; font-weight: 600; font-size: 0.95rem;'>Accuracy Rate</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("""
+        <div style='text-align: center; padding: 2.5rem 1.5rem; background: white; border-radius: 24px; box-shadow: 0 10px 35px rgba(0,0,0,0.08); transition: all 0.4s ease;' onmouseover='this.style.transform="translateY(-8px)"; this.style.boxShadow="0 15px 50px rgba(0,0,0,0.12)"' onmouseout='this.style.transform="translateY(0)"; this.style.boxShadow="0 10px 35px rgba(0,0,0,0.08)"'>
+            <div style='font-size: 3rem; margin-bottom: 1rem;'>⚡</div>
+            <div style='font-size: 2rem; font-weight: 900; color: #667eea; margin-bottom: 0.5rem; font-family: "Space Grotesk", sans-serif;'>&lt;1s</div>
+            <div style='color: #6b7280; font-weight: 600; font-size: 0.95rem;'>Response Time</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown("""
+        <div style='text-align: center; padding: 2.5rem 1.5rem; background: white; border-radius: 24px; box-shadow: 0 10px 35px rgba(0,0,0,0.08); transition: all 0.4s ease;' onmouseover='this.style.transform="translateY(-8px)"; this.style.boxShadow="0 15px 50px rgba(0,0,0,0.12)"' onmouseout='this.style.transform="translateY(0)"; this.style.boxShadow="0 10px 35px rgba(0,0,0,0.08)"'>
+            <div style='font-size: 3rem; margin-bottom: 1rem;'>🌍</div>
+            <div style='font-size: 2rem; font-weight: 900; color: #667eea; margin-bottom: 0.5rem; font-family: "Space Grotesk", sans-serif;'>Multi</div>
+            <div style='color: #6b7280; font-weight: 600; font-size: 0.95rem;'>Languages</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+if st.session_state.show_cart and not st.session_state.show_checkout:
+    st.markdown('<div class="chat-content">', unsafe_allow_html=True)
+    
+    st.markdown("### 🛒 Shopping Cart")
+    
+    if len(st.session_state.cart) == 0:
+        st.info("Your cart is empty. Add items by clicking the 🛒 button on menu items!")
+        
+        if st.button("← Back to Menu"):
+            st.session_state.show_cart = False
+            st.rerun()
+    else:
+        # Display cart items
+        for idx, item in enumerate(st.session_state.cart):
+            col1, col2, col3, col4 = st.columns([3, 1, 2, 1])
+            
+            with col1:
+                st.write(f"**{item['name']}**")
+                st.caption(f"Rs {int(item['price'])} each")
+            
+            with col2:
+                # Quantity selector
+                new_qty = st.number_input(
+                    "Qty",
+                    min_value=0,
+                    value=item['qty'],
+                    key=f"qty_{idx}",
+                    label_visibility="collapsed"
+                )
+                if new_qty != item['qty']:
+                    update_cart_quantity(idx, new_qty)
+                    st.rerun()
+            
+            with col3:
+                st.write(f"Rs {int(item['subtotal'])}")
+            
+            with col4:
+                if st.button("🗑️", key=f"remove_{idx}"):
+                    remove_from_cart(idx)
+                    st.rerun()
+        
+        st.markdown("---")
+        
+        # Cart summary
+        subtotal = get_cart_total()
+        delivery_fee = 50
+        tax = subtotal * 0.05
+        total = subtotal + delivery_fee + tax
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.write("**Subtotal:**")
+            st.write("**Delivery Fee:**")
+            st.write("**Tax (5%):**")
+            st.markdown("**Total:**")
+        with col2:
+            st.write(f"Rs {int(subtotal)}")
+            st.write(f"Rs {int(delivery_fee)}")
+            st.write(f"Rs {int(tax)}")
+            st.markdown(f"**Rs {int(total)}**")
+        
+        st.markdown("---")
+        
+        # Actions
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button("← Continue Shopping", use_container_width=True):
+                st.session_state.show_cart = False
+                st.rerun()
+        with col2:
+            if st.button("🗑️ Clear Cart", use_container_width=True):
+                clear_cart()
+                st.rerun()
+        with col3:
+            if st.button("💳 Proceed to Checkout", use_container_width=True, type="primary"):
+                st.session_state.show_checkout = True
+                st.session_state.show_cart = False
+                st.rerun()
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# Footer
+st.markdown("---")
+st.markdown("""
+<div style='text-align: center; padding: 3rem 2rem 2rem; color: white;'>
+    <p style='font-size: clamp(1.5rem, 3vw, 2rem); font-weight: 900; margin-bottom: 1rem; font-family: "Space Grotesk", sans-serif; background: linear-gradient(135deg, white 0%, rgba(255,255,255,0.85) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;'>
+         AI Menu Assistant Pro
+    </p>
+    <p style='font-size: clamp(1rem, 2vw, 1.1rem); opacity: 0.95; margin-bottom: 1rem; font-weight: 600;'>
+        Transforming Restaurants with Artificial Intelligence
+    </p>
+    <p style='font-size: clamp(0.9rem, 1.8vw, 1rem); opacity: 0.9; margin-bottom: 1.5rem;'>
+        Powered by Groq AI • Built with LangChain • Secured by FAISS
+    </p>
+    <div style='display: inline-block; background: rgba(255, 255, 255, 0.12); backdrop-filter: blur(12px); padding: 1.8rem 2.8rem; border-radius: 24px; border: 1px solid rgba(255, 255, 255, 0.25); box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);'>
+        <p style='font-size: clamp(1.1rem, 2.2vw, 1.3rem); font-weight: 900; margin-bottom: 0.5rem; background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-family: "Space Grotesk", sans-serif;'>
+            Made with ❤️ by Shahbaz
+        </p>
+        <p style='font-size: clamp(0.85rem, 1.8vw, 0.95rem); opacity: 0.95; margin: 0;'>
+            Full-Stack AI Developer | Available for Freelance Projects
+        </p>
+    </div>
+    <p style='margin-top: 2rem; font-size: clamp(0.8rem, 1.6vw, 0.9rem); opacity: 0.85;'>
+        Open for custom AI solutions | Portfolio project showcasing RAG technology
+    </p>
+</div>
+""", unsafe_allow_html=True)
+if st.session_state.show_cart and not st.session_state.show_checkout:
+    st.markdown('<div class="chat-content">', unsafe_allow_html=True)
+    
+    st.markdown("### 🛒 Shopping Cart")
+    
+    if len(st.session_state.cart) == 0:
+        st.info("Your cart is empty. Add items by clicking the 🛒 button on menu items!")
+        
+        if st.button("← Back to Menu"):
+            st.session_state.show_cart = False
+            st.rerun()
+    else:
+        # Display cart items
+        for idx, item in enumerate(st.session_state.cart):
+            col1, col2, col3, col4 = st.columns([3, 1, 2, 1])
+            
+            with col1:
+                st.write(f"**{item['name']}**")
+                st.caption(f"Rs {int(item['price'])} each")
+            
+            with col2:
+                # Quantity selector
+                new_qty = st.number_input(
+                    "Qty",
+                    min_value=0,
+                    value=item['qty'],
+                    key=f"qty_{idx}",
+                    label_visibility="collapsed"
+                )
+                if new_qty != item['qty']:
+                    update_cart_quantity(idx, new_qty)
+                    st.rerun()
+            
+            with col3:
+                st.write(f"Rs {int(item['subtotal'])}")
+            
+            with col4:
+                if st.button("🗑️", key=f"remove_{idx}"):
+                    remove_from_cart(idx)
+                    st.rerun()
+        
+        st.markdown("---")
+        
+        # Cart summary
+        subtotal = get_cart_total()
+        delivery_fee = 50
+        tax = subtotal * 0.05
+        total = subtotal + delivery_fee + tax
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.write("**Subtotal:**")
+            st.write("**Delivery Fee:**")
+            st.write("**Tax (5%):**")
+            st.markdown("**Total:**")
+        with col2:
+            st.write(f"Rs {int(subtotal)}")
+            st.write(f"Rs {int(delivery_fee)}")
+            st.write(f"Rs {int(tax)}")
+            st.markdown(f"**Rs {int(total)}**")
+        
+        st.markdown("---")
+        
+        # Actions
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button("← Continue Shopping", use_container_width=True):
+                st.session_state.show_cart = False
+                st.rerun()
+        with col2:
+            if st.button("🗑️ Clear Cart", use_container_width=True):
+                clear_cart()
+                st.rerun()
+        with col3:
+            if st.button("💳 Proceed to Checkout", use_container_width=True, type="primary"):
+                st.session_state.show_checkout = True
+                st.session_state.show_cart = False
+                st.rerun()
+    
+    st.markdown('</div>', unsafe_allow_html=True) */

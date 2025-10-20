@@ -1,0 +1,103 @@
+# # Core dependencies
+# langchain==0.1.20
+# langchain-community==0.0.38
+# langchain-openai==0.1.3
+# langchain-groq==0.1.3
+
+# # AI APIs
+# openai>=1.12.0
+# groq>=0.5.0
+
+# # Vector store
+# faiss-cpu==1.8.0
+
+# # Embeddings (FREE - no API key needed!)
+# sentence-transformers==2.5.1
+
+# # PDF processing - try pypdf (works on all systems)
+# pypdf>=4.0.0
+
+# # Alternative if you want pymupdf (may need Visual Studio on Windows)
+# # PyMuPDF>=1.24.0
+
+# # Web framework
+# streamlit==1.32.0
+
+# # Utilities
+# python-dotenv==1.0.0
+# requests>=2.31.0
+
+# # ==================== CORE ====================
+# streamlit==1.31.0
+# python-dotenv==1.0.0
+
+# # ==================== AI & LANGCHAIN ====================
+# langchain==0.1.10
+# langchain-community==0.0.24
+# langchain-groq==0.0.1
+# groq==0.4.2
+
+# # ==================== VECTOR STORE ====================
+# faiss-cpu==1.7.4
+
+# # ==================== EMBEDDINGS ====================
+# sentence-transformers==2.3.1
+# transformers==4.37.2
+
+# # ==================== PDF PROCESSING ====================
+# pypdf==4.0.1
+
+# # ==================== DATABASE ====================
+# pymongo==4.6.1
+
+# # ==================== API SERVER ====================
+# flask==3.0.0
+# flask-cors==4.0.0
+# werkzeug==3.0.1
+
+# # ==================== UTILITIES ====================
+# numpy==1.24.3
+# pandas==2.0.3
+# requests==2.31.0
+
+# # ==================== OPTIONAL ====================
+# # Uncomment if needed
+
+# # OpenAI (alternative to Groq)
+# # langchain-openai==0.0.5
+# # openai==1.12.0
+
+# # PyMuPDF (alternative PDF processor)
+# # pymupdf==1.23.26
+
+# # Email notifications
+# # sendgrid==6.11.0
+
+# # Rate limiting
+# # flask-limiter==3.5.0
+
+# # Monitoring
+# # sentry-sdk==1.40.0
+
+
+# Core AI & LLM
+google-generativeai>=0.3.0
+langchain>=0.1.0
+langchain-community>=0.0.20
+
+# Embeddings (FREE)
+sentence-transformers>=2.2.0
+
+# Vector Store
+faiss-cpu>=1.7.4
+
+# PDF Processing (choose one)
+pypdf>=3.0.0
+# OR: pymupdf>=1.23.0
+
+# Streamlit App
+streamlit>=1.30.0
+
+# Utilities
+python-dotenv>=1.0.0
+requests>=2.31.0

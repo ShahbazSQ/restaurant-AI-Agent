@@ -1,0 +1,20 @@
+What we are building in this Chatbot
+Core RAG Engine - Upload menu PDF, process it, query it
+Streamlit Web Interface - Clean chat UI for demo/testing
+WhatsApp Integration Ready - Structure that you can plug WhatsApp API into
+Price filtering, dietary preferences, smart suggestions
+
+PROJECT STRUCTURE:
+restaurant-rag-bot/
+├── app.py                 # Streamlit web interface
+├── rag_engine.py          # Core RAG logic
+├── whatsapp_handler.py    # WhatsApp integration (skeleton)
+├── utils.py               # Helper functions
+├── requirements.txt       # Dependencies
+├── .env.example          # Environment variables template
+└── sample_menus/         # Test with sample menus
+
+
+
+One time to not ask the permissions
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser

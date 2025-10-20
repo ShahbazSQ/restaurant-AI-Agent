@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.env
+
+# Virtual environments
+venv/
+rag_venv/
+
+# Local database & cache
+*.db
+*.sqlite
+*.bin
+*.pt
+
+# Streamlit cache
+.streamlit/cache/
+
+.streamlit/secrets.toml
