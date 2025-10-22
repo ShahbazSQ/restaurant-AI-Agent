@@ -245,7 +245,200 @@ class RestaurantRAG:
         """Set callback function to place orders"""
         self.order_callback = callback
         print("✅ Order callback connected")
-    
+    # Add these methods to your RestaurantRAG class
+
+    def _detect_intent(self, question: str) -> Dict[str, any]:
+        """
+        Detect what user wants to do
+        Returns: {
+            'intent': 'order' | 'browse' | 'ask',
+            'has_budget': bool,
+            'budget': float or None,
+            'keywords': List[str]
+        }
+        """
+        question_lower = question.lower()
+        
+        # Order intent triggers
+        order_triggers = [
+            'order', 'want', 'get me', 'i need', 'hungry', 
+            'buy', 'purchase', 'add', 'give me'
+        ]
+        
+        # Check if user wants to order
+        wants_to_order = any(trigger in question_lower for trigger in order_triggers)
+        
+        # Extract budget
+        budget = self._extract_price_limit(question)
+        
+        # Extract food keywords
+        keywords = []
+        food_keywords = {
+            'chicken': ['chicken'],
+            'beef': ['beef'],
+            'mutton': ['mutton', 'lamb'],
+            'fish': ['fish'],
+            'vegetarian': ['vegetarian', 'vegan', 'veggie'],
+            'spicy': ['spicy', 'hot'],
+            'rice': ['rice', 'biryani', 'pulao'],
+            'bread': ['naan', 'roti', 'bread']
+        }
+        
+        for category, words in food_keywords.items():
+            if any(word in question_lower for word in words):
+                keywords.append(category)
+        
+        return {
+            'intent': 'order' if wants_to_order else 'browse',
+            'has_budget': budget is not None,
+            'budget': budget,
+            'keywords': keywords
+        }
+
+    def _auto_select_items(self, intent_data: Dict) -> List[Dict]:
+        """
+        Automatically select items based on user intent
+        This is the CORE agentic behavior
+        """
+        selected_items = []
+        budget = intent_data.get('budget')
+        keywords = intent_data.get('keywords', [])
+        
+        # If budget specified, create meal plan
+        if budget:
+            # Allocate budget: 50% main, 30% side, 20% drink
+            main_budget = budget * 0.5
+            side_budget = budget * 0.3
+            drink_budget = budget * 0.2
+            
+            # Find main dish
+            main_items = [
+                item for item in self.menu_items
+                if item.price <= main_budget and
+                (not keywords or any(kw in ' '.join(item.tags + [item.name.lower()]) for kw in keywords))
+            ]
+            
+            if main_items:
+                # Pick best match or most expensive within budget
+                main = max(main_items, key=lambda x: x.price)
+                selected_items.append({
+                    'name': main.name,
+                    'price': main.price,
+                    'quantity': 1
+                })
+                
+                # Find side dish
+                side_items = [
+                    item for item in self.menu_items
+                    if item.price <= side_budget and
+                    any(word in item.name.lower() for word in ['naan', 'rice', 'roti', 'salad'])
+                ]
+                
+                if side_items:
+                    side = max(side_items, key=lambda x: x.price)
+                    selected_items.append({
+                        'name': side.name,
+                        'price': side.price,
+                        'quantity': 1
+                    })
+                
+                # Find drink
+                drink_items = [
+                    item for item in self.menu_items
+                    if item.price <= drink_budget and
+                    any(word in item.name.lower() for word in ['drink', 'lassi', 'juice', 'water'])
+                ]
+                
+                if drink_items:
+                    drink = min(drink_items, key=lambda x: x.price)  # Cheapest drink
+                    selected_items.append({
+                        'name': drink.name,
+                        'price': drink.price,
+                        'quantity': 1
+                    })
+        
+        # If keywords but no budget
+        elif keywords:
+            matching_items = []
+            for item in self.menu_items:
+                item_text = (item.name + ' ' + ' '.join(item.tags)).lower()
+                if any(kw in item_text for kw in keywords):
+                    matching_items.append(item)
+            
+            # Pick top 2-3 items
+            matching_items.sort(key=lambda x: x.price, reverse=True)
+            for item in matching_items[:2]:
+                selected_items.append({
+                    'name': item.name,
+                    'price': item.price,
+                    'quantity': 1
+                })
+        
+        # Default: popular items
+        else:
+            for item in self.menu_items[:2]:
+                selected_items.append({
+                    'name': item.name,
+                    'price': item.price,
+                    'quantity': 1
+                })
+        
+        return selected_items
+
+    def query_agentic(self, question: str) -> Dict[str, any]:
+        """
+        AGENTIC query - AI takes autonomous actions
+        """
+        # Detect intent
+        intent = self._detect_intent(question)
+        
+        # Get vector search context
+        docs = self.vectorstore.similarity_search(question, k=3)
+        menu_context = "\n".join([doc.page_content for doc in docs])
+        
+        # If user wants to order, AUTO-SELECT items
+        if intent['intent'] == 'order':
+            selected_items = self._auto_select_items(intent)
+            
+            # AUTO-ADD to cart
+            for item in selected_items:
+                if self.cart_callback:
+                    self.cart_callback(item['name'], item['price'])
+            
+            # Build response
+            total = sum(item['price'] * item['quantity'] for item in selected_items)
+            
+            items_text = "\n".join([
+                f"✅ {item['name']} - Rs {item['price']}"
+                for item in selected_items
+            ])
+            
+            answer = f"""Perfect! I've added these items to your cart:
+
+    {items_text}
+
+    💰 **Total: Rs {int(total)}**
+
+    """
+            
+            if intent['has_budget']:
+                remaining = intent['budget'] - total
+                answer += f"Remaining from your Rs {intent['budget']} budget: Rs {int(remaining)}\n\n"
+            
+            answer += "Ready to place your order? Just say **'Yes, place order'** and provide your delivery address!"
+            
+            return {
+                "answer": answer,
+                "source_documents": docs,
+                "recommendations": self._get_relevant_items(question, None),
+                "actions_taken": [item['name'] for item in selected_items],
+                "agentic": True,
+                "auto_added": True
+            }
+        
+        # Normal browse/ask query
+        else:
+            return self.query(question)
     # ============================================
     # SIMPLIFIED QUERY (NO AGENT - WORKING)
     # ============================================

@@ -1253,74 +1253,164 @@ elif st.session_state.menu_processed and st.session_state.rag_engine:
         with st.chat_message("user", avatar="👤"):
             st.write(user_prompt)
         
-        # Get AI response (with agentic capabilities!)
+        # Get AI response - USE AGENTIC METHOD
         with st.chat_message("assistant", avatar="🤖"):
             with st.spinner("🤔 Thinking and taking actions..."):
                 try:
-                    response = st.session_state.rag_engine.query(user_prompt)
-                    answer = response['answer']
-                    
-                    # Check if AI took autonomous actions
-                    is_agentic = response.get('agentic', False)
-                    actions_taken = response.get('actions_taken', [])
-                    
-                    if is_agentic and actions_taken:
-                        st.info(f"🤖 **AI took autonomous action:** Added {', '.join(actions_taken)} to your cart!")
-                    
-                    st.write(answer)
-                    
-                    # Get recommendations
-                    items_to_show = response.get('recommendations', [])
-                    
-                    if items_to_show and len(items_to_show) > 0:
-                        st.markdown("---")
-                        
-                        if is_agentic:
-                            st.markdown("**🛒 Also consider these:**")
+                    # Check if user wants to place order (confirmation)
+                    if any(word in user_prompt.lower() for word in ['yes', 'place order', 'confirm', 'proceed']):
+                        # Check if cart has items
+                        if len(st.session_state.cart) > 0:
+                            st.info("🎉 **Great! Let's complete your order.**")
+                            st.write("Please provide:")
+                            st.write("1. Your name")
+                            st.write("2. Phone number")
+                            st.write("3. Delivery address")
+                            st.write("\nExample: *Ahmed, +92 300 1234567, House 123 Street 4*")
+                            
+                            # Save special flag
+                            message_data = {
+                                "role": "assistant",
+                                "content": "Great! I need your delivery details to complete the order. Please provide your name, phone, and address."
+                            }
+                            st.session_state.messages.append(message_data)
                         else:
-                            st.markdown("**🛒 Add to Cart:**")
+                            st.warning("Your cart is empty! Tell me what you'd like to order.")
+                            message_data = {
+                                "role": "assistant",
+                                "content": "Your cart is empty. What would you like to order?"
+                            }
+                            st.session_state.messages.append(message_data)
+                    
+                    # Check if user is providing delivery details
+                    elif len(st.session_state.cart) > 0 and any(char.isdigit() for char in user_prompt):
+                        # Try to extract delivery info
+                        import re
+                        phone_match = re.search(r'\+?\d{10,}', user_prompt)
                         
-                        cols = st.columns(min(3, len(items_to_show)))
+                        if phone_match:
+                            st.success("📝 Processing your order...")
+                            st.write("**Order Summary:**")
+                            for item in st.session_state.cart:
+                                st.write(f"- {item['qty']}x {item['name']} (Rs {item['subtotal']})")
+                            st.write(f"\n**Total: Rs {int(get_cart_total())}**")
+                            st.write("\n✅ Order details saved!")
+                            st.write("\n*Click 'Proceed to Checkout' in the sidebar to complete payment.*")
+                            
+                            message_data = {
+                                "role": "assistant",
+                                "content": f"Perfect! Your order is ready. Total: Rs {int(get_cart_total())}. Click 'Proceed to Checkout' in the sidebar to complete your order!"
+                            }
+                            st.session_state.messages.append(message_data)
+                        else:
+                            st.write("I need your phone number to complete the order. Please provide it.")
+                            message_data = {
+                                "role": "assistant",
+                                "content": "I need your phone number. Please provide your contact details."
+                            }
+                            st.session_state.messages.append(message_data)
+                    
+                    # Normal order/browse query - USE AGENTIC
+                    else:
+                        response = st.session_state.rag_engine.query_agentic(user_prompt)
+                        answer = response['answer']
                         
-                        for idx, item_data in enumerate(items_to_show[:3]):
-                            with cols[idx]:
-                                st.markdown(f"**{item_data['name'][:20]}**")
-                                st.caption(f"Rs {int(item_data['price'])}")
-                                
-                                btn_key = f"new_{len(st.session_state.messages)}_{idx}"
-                                if st.button("➕ Add", key=btn_key, use_container_width=True):
-                                    st.session_state[f'add_item_{btn_key}'] = {
-                                        'name': item_data['name'],
-                                        'price': float(item_data['price'])
-                                    }
-                                    st.rerun()
-                    
-                    # Show sources
-                    if response.get('source_documents'):
-                        with st.expander("📚 View Menu Sources"):
-                            for idx, doc in enumerate(response['source_documents'][:3]):
-                                st.markdown(f"**📄 Source {idx+1}:**")
-                                st.code(doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content)
-                                if idx < 2:
-                                    st.markdown("---")
-                    
-                    # Save message
-                    message_data = {
-                        "role": "assistant", 
-                        "content": answer,
-                        "agentic": is_agentic,
-                        "actions_taken": actions_taken
-                    }
-                    if items_to_show:
-                        message_data["items_data"] = items_to_show[:3]
-                    
-                    st.session_state.messages.append(message_data)
+                        # Check if AI auto-added items
+                        auto_added = response.get('auto_added', False)
+                        actions_taken = response.get('actions_taken', [])
+                        
+                        if auto_added and actions_taken:
+                            st.success(f"🤖 **AI automatically added {len(actions_taken)} items to your cart!**")
+                        
+                        st.write(answer)
+                        
+                        # Show recommendations
+                        items_to_show = response.get('recommendations', [])
+                        
+                        if items_to_show and len(items_to_show) > 0 and not auto_added:
+                            st.markdown("---")
+                            st.markdown("**🛒 Or manually add these:**")
+                            
+                            cols = st.columns(min(3, len(items_to_show)))
+                            
+                            for idx, item_data in enumerate(items_to_show[:3]):
+                                with cols[idx]:
+                                    st.markdown(f"**{item_data['name'][:20]}**")
+                                    st.caption(f"Rs {int(item_data['price'])}")
+                                    
+                                    btn_key = f"new_{len(st.session_state.messages)}_{idx}"
+                                    if st.button("➕ Add", key=btn_key, use_container_width=True):
+                                        st.session_state[f'add_item_{btn_key}'] = {
+                                            'name': item_data['name'],
+                                            'price': float(item_data['price'])
+                                        }
+                                        st.rerun()
+                        
+                        # Save message
+                        message_data = {
+                            "role": "assistant",
+                            "content": answer,
+                            "agentic": response.get('agentic', False),
+                            "actions_taken": actions_taken
+                        }
+                        if items_to_show and not auto_added:
+                            message_data["items_data"] = items_to_show[:3]
+                        
+                        st.session_state.messages.append(message_data)
                 
                 except Exception as e:
                     st.error(f"❌ **Error:** {str(e)}")
                     st.info("💡 Try rephrasing your question")
     
     st.markdown('</div>', unsafe_allow_html=True)
+# ```
+
+# ---
+
+## 🎯 **How It Works Now:**
+
+### **Example 1: Budget Order**
+# ```
+# User: "I have 800 rupees"
+
+# AI: *Analyzes budget*
+#     *Selects: Chicken Biryani (Rs 450), Naan (Rs 80), Lassi (Rs 250)*
+#     *AUTO-ADDS to cart*
+    
+#     "Perfect! I've added these items to your cart:
+#     ✅ Chicken Biryani - Rs 450
+#     ✅ Naan - Rs 80
+#     ✅ Mango Lassi - Rs 250
+    
+#     💰 Total: Rs 780
+#     Remaining: Rs 20
+    
+#     Ready to place your order? Just say 'Yes, place order'!"
+
+# User: "Yes place order"
+
+# AI: "Great! Please provide:
+#      1. Your name
+#      2. Phone number  
+#      3. Delivery address"
+
+# User: "Ahmed, +92 300 1234567, House 123"
+
+# AI: "Perfect! Your order is ready. Total: Rs 780.
+#      Click 'Proceed to Checkout' to complete!"
+# ```
+
+# ### **Example 2: Direct Order**
+# ```
+# User: "I want chicken biryani"
+
+# AI: *Finds Chicken Biryani*
+#     *AUTO-ADDS to cart*
+    
+#     "Perfect! I've added:
+#     ✅ Chicken Biryani - Rs 450
+    
+#     Ready to order? Say 'Yes'!"
 
 
 # Footer
