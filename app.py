@@ -1177,7 +1177,7 @@ elif not st.session_state.menu_processed:
 
 # CHAT INTERFACE
 elif st.session_state.menu_processed and st.session_state.rag_engine:
-    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+    # st.markdown('<div class="chat-container">', unsafe_allow_html=True)
     
     st.markdown("### 💭 Try These Questions")
     cols = st.columns(4)

@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 from typing import List, Dict, Optional, Callable
 from dataclasses import dataclass
 
@@ -61,6 +62,8 @@ class RestaurantRAG:
         self.agentic_mode = False  # Force disable for now
         self.vectorstore = None
         self.menu_items = []
+        self.last_recommended_items = []  # Store what AI just recommended
+        self.conversation_context = []
         
         # Agentic features (for later)
         self.cart_callback = None
@@ -386,18 +389,84 @@ class RestaurantRAG:
         return selected_items
 
     def query_agentic(self, question: str) -> Dict[str, any]:
-        """
-        AGENTIC query - AI takes autonomous actions
-        """
-        # Detect intent
+
+    
+        # Add to conversation history
+        self.conversation_context.append({
+            'role': 'user',
+            'content': question,
+            'timestamp': time.time()
+        })
+    
+        # ============================================
+        # CHECK IF USER IS REFERRING TO PREVIOUS ITEMS
+        # ============================================
+        referring_words = ['these', 'those', 'them', 'that', 'it', 'same', 'all']
+        action_words = ['add', 'order', 'want', 'get', 'buy', 'take']
+        
+        question_lower = question.lower()
+        is_referring_back = any(word in question_lower for word in referring_words)
+        wants_action = any(word in question_lower for word in action_words)
+        
+        # If user says "add these/those/them" AND we have previous recommendations
+        if is_referring_back and wants_action and self.last_recommended_items:
+            print(f"🧠 MEMORY: User referring to previous {len(self.last_recommended_items)} items")
+            
+            # AUTO-ADD the previously recommended items
+            added_items = []
+            for item in self.last_recommended_items:
+                if self.cart_callback:
+                    self.cart_callback(item['name'], item['price'])
+                    added_items.append(item)
+            
+            total = sum(item['price'] for item in added_items)
+            items_text = "\n".join([
+                f"✅ {item['name']} - Rs {item['price']}"
+                for item in added_items
+            ])
+            
+            answer = f"""Perfect! I've added those items to your cart:
+
+    {items_text}
+
+    💰 **Total: Rs {int(total)}**
+
+    Ready to place your order? Just say **'Yes, place order'** and I'll help you complete it!"""
+            
+            # Store in conversation
+            self.conversation_context.append({
+                'role': 'assistant',
+                'content': answer,
+                'items_added': [item['name'] for item in added_items]
+            })
+            
+            # Clear last recommended since we added them
+            self.last_recommended_items = []
+            
+            return {
+                "answer": answer,
+                "source_documents": [],
+                "recommendations": [],
+                "actions_taken": [item['name'] for item in added_items],
+                "agentic": True,
+                "auto_added": True
+            }
+        
+        # ============================================
+        # DETECT INTENT
+        # ============================================
         intent = self._detect_intent(question)
         
         # Get vector search context
         docs = self.vectorstore.similarity_search(question, k=3)
         menu_context = "\n".join([doc.page_content for doc in docs])
         
-        # If user wants to order, AUTO-SELECT items
+        # ============================================
+        # INTENT: USER WANTS TO ORDER
+        # ============================================
         if intent['intent'] == 'order':
+            print(f"🤖 ORDER INTENT detected: budget={intent.get('budget')}, keywords={intent.get('keywords')}")
+            
             selected_items = self._auto_select_items(intent)
             
             # AUTO-ADD to cart
@@ -427,6 +496,16 @@ class RestaurantRAG:
             
             answer += "Ready to place your order? Just say **'Yes, place order'** and provide your delivery address!"
             
+            # Store in conversation
+            self.conversation_context.append({
+                'role': 'assistant',
+                'content': answer,
+                'items_added': [item['name'] for item in selected_items]
+            })
+            
+            # Clear recommendations since we auto-added
+            self.last_recommended_items = []
+            
             return {
                 "answer": answer,
                 "source_documents": docs,
@@ -436,9 +515,34 @@ class RestaurantRAG:
                 "auto_added": True
             }
         
-        # Normal browse/ask query
+        # ============================================
+        # INTENT: USER IS BROWSING/ASKING
+        # ============================================
         else:
-            return self.query(question)
+            print(f"📖 BROWSE INTENT: Showing recommendations, storing for memory")
+            
+            # Get normal query response
+            result = self.query(question)
+            
+            # Store recommended items for next turn
+            recommended = self._get_relevant_items(question, intent.get('budget'))
+            self.last_recommended_items = recommended
+            
+            # Add to conversation context
+            self.conversation_context.append({
+                'role': 'assistant',
+                'content': result['answer'],
+                'recommended_items': [item['name'] for item in recommended]
+            })
+            
+            print(f"💾 STORED {len(recommended)} items in memory: {[i['name'] for i in recommended[:3]]}")
+            
+            # Return with stored recommendations
+            return {
+                **result,
+                "agentic": False,
+                "stored_for_later": True  # Flag that we stored these
+            }
     # ============================================
     # SIMPLIFIED QUERY (NO AGENT - WORKING)
     # ============================================
@@ -527,7 +631,7 @@ Your answer:"""
     # ============================================
     
     def _get_relevant_items(self, question: str, price_limit: Optional[float] = None) -> List[Dict]:
-        """Extract menu items relevant to the question"""
+    
         if not self.menu_items:
             return []
         
@@ -554,16 +658,28 @@ Your answer:"""
         for item in self.menu_items:
             item_name_lower = item.name.lower()
             
+            # Price filter FIRST
+            if price_limit and item.price > price_limit:
+                continue
+            
             # Check if question directly mentions this item
             if any(word in question_lower for word in item_name_lower.split()):
-                relevant_items.append({"name": item.name, "price": item.price})
+                relevant_items.append({
+                    "name": item.name, 
+                    "price": item.price,
+                    "tags": item.tags
+                })
                 continue
             
             # Check keyword categories
             for category, words in keywords.items():
                 if any(word in question_lower for word in words):
                     if any(word in item_name_lower for word in words):
-                        relevant_items.append({"name": item.name, "price": item.price})
+                        relevant_items.append({
+                            "name": item.name,
+                            "price": item.price,
+                            "tags": item.tags
+                        })
                         break
         
         # Apply price filter if specified
@@ -573,7 +689,11 @@ Your answer:"""
         # If no specific matches, return popular items
         if not relevant_items:
             relevant_items = [
-                {"name": item.name, "price": item.price} 
+                {
+                    "name": item.name,
+                    "price": item.price,
+                    "tags": item.tags
+                }
                 for item in self.menu_items[:6]
             ]
         
