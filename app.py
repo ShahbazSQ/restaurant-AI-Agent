@@ -1113,7 +1113,7 @@ elif not st.session_state.menu_processed:
         <div class='feature-card'>
             <div class='feature-icon'>📱</div>
             <div class='feature-title'>WhatsApp Ready<span class='premium-badge'>PRO</span></div>
-            <div class='feature-desc'>Integrate with WhatsApp Business API</div>
+            <div class='feature-desc'>This option can be implemented through a secure integration with the WhatsApp Business API for real-time engagement. </div>
         </div>
         """, unsafe_allow_html=True)
     with col3:
